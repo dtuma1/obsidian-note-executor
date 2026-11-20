@@ -1,0 +1,21 @@
+{
+	"name": "obsidian-note-executor",
+	"version": "1.0.0",
+	"description": "Obsidian plugin (desktop + mobile) that executes new notes: JS code blocks (opt-in) or webhook POST.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"plugin"
+	],
+	"author": "dtuma1",
+	"license": "MIT",
+	"devDependencies": {
+		"esbuild": "^0.24.2",
+		"obsidian": "^1.8.7",
+		"typescript": "^5.6.3"
+	}
+}
