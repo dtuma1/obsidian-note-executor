@@ -1,0 +1,9 @@
+{
+	"id": "note-executor",
+	"name": "Note Executor",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Watches for new notes and executes them: runs JS code blocks (opt-in via frontmatter) or sends the note to a webhook. Works on desktop and mobile.",
+	"author": "dtuma1",
+	"isDesktopOnly": false
+}
