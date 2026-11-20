@@ -33,7 +33,7 @@ var DEFAULT_SETTINGS = {
   webhookUrl: "",
   folder: ""
 };
-var NoteExecutorPlugin = class extends import_obsidian.Plugin {
+var _NoteExecutorPlugin = class _NoteExecutorPlugin extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.processed = /* @__PURE__ */ new Set();
@@ -43,6 +43,13 @@ var NoteExecutorPlugin = class extends import_obsidian.Plugin {
     this.addSettingTab(new NoteExecutorSettingTab(this.app, this));
     this.registerEvent(
       this.app.vault.on("create", (file) => {
+        if (file instanceof import_obsidian.TFile) {
+          void this.handleNewFile(file);
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
         if (file instanceof import_obsidian.TFile) {
           void this.handleNewFile(file);
         }
@@ -65,10 +72,22 @@ var NoteExecutorPlugin = class extends import_obsidian.Plugin {
     });
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    this.processed = new Set(Array.isArray(data == null ? void 0 : data.seen) ? data.seen : []);
   }
   async saveSettings() {
-    await this.saveData(this.settings);
+    const data = { ...this.settings, seen: [...this.processed] };
+    await this.saveData(data);
+  }
+  markProcessed(path) {
+    this.processed.add(path);
+    while (this.processed.size > _NoteExecutorPlugin.MAX_SEEN) {
+      const oldest = this.processed.values().next().value;
+      if (oldest === void 0) break;
+      this.processed.delete(oldest);
+    }
+    void this.saveSettings();
   }
   matchesFolder(file) {
     const folder = this.settings.folder.trim().replace(/\/+$/, "");
@@ -76,17 +95,15 @@ var NoteExecutorPlugin = class extends import_obsidian.Plugin {
     return file.path === folder || file.path.startsWith(folder + "/");
   }
   async handleNewFile(file) {
-    var _a;
     if (!this.settings.enabled) return;
     if (file.extension !== "md") return;
     if (!this.matchesFolder(file)) return;
     if (this.processed.has(file.path)) return;
-    this.processed.add(file.path);
     const content = await this.app.vault.cachedRead(file);
-    const cache = this.app.metadataCache.getFileCache(file);
-    const frontmatter = (_a = cache == null ? void 0 : cache.frontmatter) != null ? _a : {};
-    const wantsJs = frontmatter["run"] === "js" || frontmatter["execute"] === "js";
-    if (wantsJs && this.settings.runJsBlocks) {
+    if (!content.trim()) return;
+    this.markProcessed(file.path);
+    const frontmatter = this.parseFrontmatter(content);
+    if (frontmatter["run"] === "js" && this.settings.runJsBlocks) {
       await this.executeJs(file, content);
       return;
     }
@@ -94,12 +111,27 @@ var NoteExecutorPlugin = class extends import_obsidian.Plugin {
       await this.sendToWebhook(file, content, frontmatter);
     }
   }
+  parseFrontmatter(content) {
+    var _a;
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!match) return {};
+    try {
+      return (_a = (0, import_obsidian.parseYaml)(match[1])) != null ? _a : {};
+    } catch (err) {
+      console.error(err);
+      return {};
+    }
+  }
   extractJs(content) {
-    const match = content.match(/```(?:js|javascript)\n([\s\S]*?)```/i);
-    return match ? match[1] : content;
+    const match = content.match(/```[ \t]*(?:js|javascript)[ \t]*\r?\n([\s\S]*?)```/i);
+    return match ? match[1] : null;
   }
   async executeJs(file, content) {
     const code = this.extractJs(content);
+    if (code === null) {
+      new import_obsidian.Notice(`Note Executor: no js code block in ${file.name}, skipped`);
+      return;
+    }
     try {
       const fn = new Function(
         "app",
@@ -149,6 +181,8 @@ ${code}`
     new import_obsidian.Notice(`Note Executor: processed ${count} note(s)`);
   }
 };
+_NoteExecutorPlugin.MAX_SEEN = 1e3;
+var NoteExecutorPlugin = _NoteExecutorPlugin;
 var NoteExecutorSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -171,17 +205,17 @@ var NoteExecutorSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Webhook URL").setDesc("New notes are POSTed here as JSON when JS execution does not apply").addText(
-      (text) => text.setPlaceholder("https://example.com/hook").setValue(this.plugin.settings.webhookUrl).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Webhook URL").setDesc("New notes are POSTed here as JSON when JS execution does not apply").addText((text) => {
+      text.setPlaceholder("https://example.com/hook").setValue(this.plugin.settings.webhookUrl).onChange((value) => {
         this.plugin.settings.webhookUrl = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Folder filter").setDesc("Only react to notes in this folder (leave empty for the whole vault)").addText(
-      (text) => text.setPlaceholder("e.g. inbox/").setValue(this.plugin.settings.folder).onChange(async (value) => {
+      });
+      text.inputEl.addEventListener("blur", () => void this.plugin.saveSettings());
+    });
+    new import_obsidian.Setting(containerEl).setName("Folder filter").setDesc("Only react to notes in this folder (leave empty for the whole vault)").addText((text) => {
+      text.setPlaceholder("e.g. inbox/").setValue(this.plugin.settings.folder).onChange((value) => {
         this.plugin.settings.folder = value;
-        await this.plugin.saveSettings();
-      })
-    );
+      });
+      text.inputEl.addEventListener("blur", () => void this.plugin.saveSettings());
+    });
   }
 };

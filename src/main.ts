@@ -1,6 +1,7 @@
 import {
 	App,
 	Notice,
+	parseYaml,
 	Plugin,
 	PluginSettingTab,
 	Setting,
@@ -22,9 +23,14 @@ const DEFAULT_SETTINGS: NoteExecutorSettings = {
 	folder: "",
 };
 
+interface NoteExecutorData extends NoteExecutorSettings {
+	seen?: string[];
+}
+
 export default class NoteExecutorPlugin extends Plugin {
 	settings: NoteExecutorSettings;
 	private processed = new Set<string>();
+	private static readonly MAX_SEEN = 1000;
 
 	async onload() {
 		await this.loadSettings();
@@ -33,6 +39,14 @@ export default class NoteExecutorPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
+				if (file instanceof TFile) {
+					void this.handleNewFile(file);
+				}
+			})
+		);
+
+		this.registerEvent(
+			this.app.metadataCache.on("changed", (file) => {
 				if (file instanceof TFile) {
 					void this.handleNewFile(file);
 				}
@@ -58,11 +72,24 @@ export default class NoteExecutorPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const data = (await this.loadData()) as NoteExecutorData | null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+		this.processed = new Set(Array.isArray(data?.seen) ? data.seen : []);
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		const data: NoteExecutorData = { ...this.settings, seen: [...this.processed] };
+		await this.saveData(data);
+	}
+
+	private markProcessed(path: string) {
+		this.processed.add(path);
+		while (this.processed.size > NoteExecutorPlugin.MAX_SEEN) {
+			const oldest = this.processed.values().next().value;
+			if (oldest === undefined) break;
+			this.processed.delete(oldest);
+		}
+		void this.saveSettings();
 	}
 
 	private matchesFolder(file: TFile): boolean {
@@ -76,14 +103,14 @@ export default class NoteExecutorPlugin extends Plugin {
 		if (file.extension !== "md") return;
 		if (!this.matchesFolder(file)) return;
 		if (this.processed.has(file.path)) return;
-		this.processed.add(file.path);
 
 		const content = await this.app.vault.cachedRead(file);
-		const cache = this.app.metadataCache.getFileCache(file);
-		const frontmatter = (cache?.frontmatter ?? {}) as Record<string, unknown>;
+		if (!content.trim()) return;
 
-		const wantsJs = frontmatter["run"] === "js" || frontmatter["execute"] === "js";
-		if (wantsJs && this.settings.runJsBlocks) {
+		this.markProcessed(file.path);
+		const frontmatter = this.parseFrontmatter(content);
+
+		if (frontmatter["run"] === "js" && this.settings.runJsBlocks) {
 			await this.executeJs(file, content);
 			return;
 		}
@@ -93,13 +120,28 @@ export default class NoteExecutorPlugin extends Plugin {
 		}
 	}
 
-	private extractJs(content: string): string {
-		const match = content.match(/```(?:js|javascript)\n([\s\S]*?)```/i);
-		return match ? match[1] : content;
+	private parseFrontmatter(content: string): Record<string, unknown> {
+		const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+		if (!match) return {};
+		try {
+			return (parseYaml(match[1]) ?? {}) as Record<string, unknown>;
+		} catch (err) {
+			console.error(err);
+			return {};
+		}
+	}
+
+	private extractJs(content: string): string | null {
+		const match = content.match(/```[ \t]*(?:js|javascript)[ \t]*\r?\n([\s\S]*?)```/i);
+		return match ? match[1] : null;
 	}
 
 	private async executeJs(file: TFile, content: string) {
 		const code = this.extractJs(content);
+		if (code === null) {
+			new Notice(`Note Executor: no js code block in ${file.name}, skipped`);
+			return;
+		}
 		try {
 			const fn = new Function(
 				"app",
@@ -192,27 +234,27 @@ class NoteExecutorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Webhook URL")
 			.setDesc("New notes are POSTed here as JSON when JS execution does not apply")
-			.addText((text) =>
+			.addText((text) => {
 				text
 					.setPlaceholder("https://example.com/hook")
 					.setValue(this.plugin.settings.webhookUrl)
-					.onChange(async (value) => {
+					.onChange((value) => {
 						this.plugin.settings.webhookUrl = value;
-						await this.plugin.saveSettings();
-					})
-			);
+					});
+				text.inputEl.addEventListener("blur", () => void this.plugin.saveSettings());
+			});
 
 		new Setting(containerEl)
 			.setName("Folder filter")
 			.setDesc("Only react to notes in this folder (leave empty for the whole vault)")
-			.addText((text) =>
+			.addText((text) => {
 				text
 					.setPlaceholder("e.g. inbox/")
 					.setValue(this.plugin.settings.folder)
-					.onChange(async (value) => {
+					.onChange((value) => {
 						this.plugin.settings.folder = value;
-						await this.plugin.saveSettings();
-					})
-			);
+					});
+				text.inputEl.addEventListener("blur", () => void this.plugin.saveSettings());
+			});
 	}
 }

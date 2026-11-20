@@ -2,8 +2,10 @@
 
 Obsidian plugin that works on **desktop and mobile** (iOS/Android). It watches for new notes and "executes" them in one of two ways:
 
-- **Run JS**: if the note's frontmatter contains `run: js` and the *Allow running JS from notes* setting is enabled (off by default), the note's first ` ```js ` fenced code block is executed with `app`, `plugin`, `file`, and `content` in scope.
+- **Run JS**: if the note's frontmatter contains `run: js` and the *Allow running JS from notes* setting is enabled (off by default), the note's first `` ```js `` fenced code block is executed with `app`, `plugin`, `file`, and `content` in scope. If no JS code block is present, the note is skipped (never executed as a whole).
 - **Webhook**: otherwise, if a webhook URL is configured, the note is POSTed there as JSON (`path`, `name`, `frontmatter`, `content`, `ctime`, `mtime`).
+
+New notes are detected via the vault `create` event plus metadata `changed` events, so notes whose content arrives later (e.g. via sync) are still processed. Frontmatter is parsed directly from the note content, not from the metadata cache. Each note is processed only once; the processed set is persisted across restarts (bounded to the most recent 1000 paths).
 
 Commands: **Process active note** and **Process all notes in vault**. A folder filter setting limits which notes are reacted to.
 
